@@ -1235,14 +1235,329 @@ body {
   pointer-events: none;
 }
 
+/* ===== HAMBURGER ===== */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  width: 40px;
+  height: 40px;
+  background: rgba(255,215,0,0.06);
+  border: 1px solid rgba(255,215,0,0.2);
+  border-radius: 6px;
+  cursor: pointer;
+  z-index: 200;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.ham-line {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: #ffd700;
+  border-radius: 2px;
+  transition: transform 0.3s, opacity 0.3s, width 0.3s;
+  box-shadow: 0 0 6px rgba(255,215,0,0.5);
+}
+
+.hamburger-open .ham-line-1 { transform: translateY(7px) rotate(45deg); }
+.hamburger-open .ham-line-2 { opacity: 0; width: 0; }
+.hamburger-open .ham-line-3 { transform: translateY(-7px) rotate(-45deg); }
+
+/* ===== MOBILE DRAWER ===== */
+.mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(4px);
+  z-index: 150;
+}
+
+.mobile-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(320px, 85vw);
+  height: 100dvh;
+  background: #08050f;
+  border-left: 1px solid rgba(255,215,0,0.15);
+  z-index: 160;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem;
+  gap: 0.5rem;
+  box-shadow: -10px 0 60px rgba(123,47,190,0.3);
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.drawer-logo {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.6rem;
+  letter-spacing: 0.08em;
+}
+
+.drawer-close {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(245,240,255,0.6);
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.drawer-close:hover { border-color: #ff2d9b; color: #ff2d9b; }
+
+.drawer-diamonds {
+  font-size: 0.85rem;
+  color: rgba(255,215,0,0.3);
+  letter-spacing: 0.4rem;
+  text-align: center;
+  margin: 0.4rem 0;
+}
+
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.5rem 0;
+}
+
+.drawer-link {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.9rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,215,0,0.08);
+  border-radius: 6px;
+  color: rgba(245,240,255,0.8);
+  font-family: 'Syne', sans-serif;
+  font-weight: 600;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+
+.drawer-link:hover {
+  border-color: rgba(255,215,0,0.3);
+  background: rgba(255,215,0,0.05);
+  color: #ffd700;
+}
+
+.drawer-link-diamond {
+  color: #ffd700;
+  font-size: 0.6rem;
+  opacity: 0.6;
+}
+
+.drawer-footer {
+  text-align: center;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.65rem;
+  color: rgba(255,215,0,0.25);
+  letter-spacing: 0.15em;
+  margin-top: 0.5rem;
+}
+
+/* ===== HERO JOJO ELEMENTS ===== */
+.speed-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0.04;
+}
+
+.speed-line {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 200%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, #ffd700 40%, transparent 100%);
+  transform-origin: left center;
+  margin-left: -100%;
+}
+
+.hero-diamonds {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.hero-diamond-pip {
+  position: absolute;
+  font-family: 'Bebas Neue', sans-serif;
+  pointer-events: none;
+  user-select: none;
+}
+
+.hero-jojo-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: center;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.7rem;
+  color: rgba(255,215,0,0.6);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+.jojo-banner-diamond {
+  color: #ffd700;
+  font-size: 0.6rem;
+  animation: diamond-pulse 2s ease-in-out infinite;
+}
+
+.muda-flash {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(3rem, 10vw, 7rem);
+  letter-spacing: 0.2em;
+  color: #ff2d9b;
+  text-shadow: 0 0 30px #ff2d9b, 0 0 60px #ff2d9b;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+}
+
+.rotating-word-jojo {
+  color: #ff2d9b !important;
+  -webkit-text-fill-color: #ff2d9b !important;
+  text-shadow: 0 0 20px #ff2d9b;
+}
+
+/* Stand cards */
+.hero-stand-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.8rem;
+  margin-bottom: 2rem;
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hero-stand-card {
+  padding: 0.9rem 0.6rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid color-mix(in srgb, var(--sc) 30%, transparent);
+  border-radius: 4px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  clip-path: polygon(10px 0%, calc(100% - 10px) 0%, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0% 50%);
+}
+
+.hero-stand-card:hover {
+  background: color-mix(in srgb, var(--sc) 12%, transparent);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--sc) 40%, transparent);
+  border-color: var(--sc);
+}
+
+.stand-card-emoji { font-size: 1.6rem; margin-bottom: 0.2rem; }
+
+.stand-card-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.5rem;
+  color: rgba(245,240,255,0.3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.stand-card-name {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  color: var(--sc);
+  text-shadow: 0 0 10px var(--sc);
+  line-height: 1.1;
+}
+
+.stand-card-stand {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.5rem;
+  color: rgba(255,215,0,0.5);
+  letter-spacing: 0.06em;
+  margin-top: 0.1rem;
+}
+
+/* ===== QUIZ TIMER ===== */
+.quiz-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.8rem;
+}
+
+.quiz-timer-badge {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.timer-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.timer-number {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+  position: relative;
+  z-index: 1;
+  transition: color 0.3s;
+}
+
+.timer-warn .timer-number { animation: timer-pulse 0.5s ease-in-out infinite alternate; }
+.timer-danger .timer-number { animation: timer-pulse 0.25s ease-in-out infinite alternate; }
+
+@keyframes timer-pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.2); }
+}
+
 /* ===== RESPONSIVE ===== */
 @media (max-width: 768px) {
   .nav-links { display: none; }
+  .hamburger { display: flex; }
   .chaos-grid { grid-template-columns: 1fr; }
   .services-grid { grid-template-columns: 1fr; }
   .testimonials-grid { grid-template-columns: repeat(3, 1fr); }
   .cta-trio { gap: 1rem; }
   .hero-chars-preview { gap: 0.6rem; }
+  .hero-stand-cards { grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
+  .stand-card-name { font-size: 0.95rem; }
 }
 
 /* ===== JOJO FLOATING TEXT ===== */
