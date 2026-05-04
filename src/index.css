@@ -1657,6 +1657,15 @@ body {
   transition: all 0.3s;
 }
 
+.quiz-music-note {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.75rem;
+  color: rgba(255,215,0,0.7);
+  margin-top: 0.8rem;
+  letter-spacing: 0.05em;
+  font-style: italic;
+}
+
 .quiz-restart-btn:hover {
   background: rgba(255,215,0,0.08);
   border-color: rgba(255,215,0,0.6);

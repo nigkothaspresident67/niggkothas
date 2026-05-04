@@ -21,7 +21,7 @@ const testimonials = [
   {
     name: 'Prasad G.',
     role: 'Brand Manager',
-    avatar: '👩‍🎨',
+    avatar: '🧑‍🎨',
     text: 'Aaditya said "yes daddy" to every brief and delivered something better than what I asked for. I\'m concerned about my own feelings now.',
     rating: 5,
     tag: 'emotionally compromised'
@@ -30,15 +30,15 @@ const testimonials = [
     name: 'Moksh',
     role: 'Army General (Retired)',
     avatar: '👨‍✈️',
-    text: 'Dhariya handled my rebrand with such military precision I almost saluted my own logo. The mission was missionary-level successful.',
+    text: 'Dhariya handled my rebrand with such shy precision I almost cried. He blushed when I said the logo looked good. Mission accomplished.',
     rating: 5,
     tag: 'mission accomplished'
   },
   {
-    name: 'Dweej',
-    role: 'Influencer (Recovering)',
+    name: 'Sanskruti',
+    role: 'Influencer (Thriving)',
     avatar: '👸',
-    text: 'They redesigned my entire online presence while arguing with each other the whole time. Somehow the chaos produced the most beautiful thing I\'ve ever seen.',
+    text: 'They redesigned my entire online presence while arguing with each other the whole time. Somehow the chaos produced the most beautiful thing I\'ve ever seen. Also Dweeb said "yo shawty" to me and I haven\'t recovered.',
     rating: 5,
     tag: 'chaotically blessed'
   },
@@ -77,7 +77,7 @@ export default function Testimonials() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
         >
-          Victims & <span className="text-accent-blue">Survivors</span>
+          Victims &amp; <span className="text-accent-blue">Survivors</span>
         </motion.h2>
         <motion.p
           className="section-sub"
