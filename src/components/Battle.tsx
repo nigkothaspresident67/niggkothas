@@ -1,893 +1,830 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
-// ─────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────
-type CharId = 'aaditya' | 'aatharva' | 'dhariya' | 'dweeb'
-type Phase = 'select' | 'fight' | 'gameover'
-
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface Fighter {
-  id: CharId
+  id: string
   name: string
   emoji: string
   color: string
   hp: number
   maxHp: number
-  def: number
-  atkMult: number   // multiplier on top of base
+  defense: number
   buffs: Buff[]
   debuffs: Debuff[]
-  turnCount: number  // total turns taken
-  ultReady: boolean
-  // special flags
-  loadedDih: boolean       // aaditya skill2 loaded
-  fatJumpUsed: number      // dweeb: last turn fat jump used
-  yumUsed: number          // dweeb: last turn yum used
-  numbnessActive: boolean  // aatharva
-  numbnessStrength: number // 0-100%
-  introvertTicks: number   // aaditya lingering ticks left
-  allMightActive: boolean  // dweeb ult
+  ultUsed: boolean
+  secretUltUsed: boolean
+  loadedDih: boolean
+  fakeJumpUsed: number   // turn it was last used
+  yumUsed: number
 }
 
-interface Buff  { name: string; value: number; turnsLeft: number }
-interface Debuff { name: string; value: number; turnsLeft: number }
+interface Buff  { id: string; label: string; value: number; turns: number }
+interface Debuff { id: string; label: string; value: number; turns: number }
 
-type MinigameType =
-  | 'rta_babu'      // dhariya skill3
-  | 'rta_totlapan'  // aatharva skill2
-  | 'sf90'          // aaditya skill3
-  | 'guitar_goon'   // secret ult
-  | 'sharmana'      // dweeb skill1
-  | 'yum'           // dweeb skill3
-  | 'slur_shot'     // dhariya skill2 (auto)
-  | null
+interface LogEntry { text: string; color?: string }
 
-// ─────────────────────────────────────────────
-// CHARACTER DEFINITIONS
-// ─────────────────────────────────────────────
-const CHAR_DEFS: Record<CharId, { name: string; emoji: string; color: string; title: string; bio: string }> = {
-  dhariya:  { name: 'Dhariya',  emoji: '🥺', color: '#00d4ff', title: 'The Mission™',    bio: 'Shy. Dramatic. Missionary.' },
-  aatharva: { name: 'Aatharva', emoji: '🍼', color: '#b44fff', title: 'The Unhinged™',   bio: 'Baby energy. Dangerous thoughts.' },
-  aaditya:  { name: 'Aaditya',  emoji: '🎸', color: '#ff2d9b', title: 'The Chikna™',     bio: 'Yes daddy. Quietly devastating.' },
-  dweeb:    { name: 'Dweeb',    emoji: '🤓', color: '#39ff14', title: 'The Big Daddy™',  bio: 'Yo shawty. Ran the numbers.' },
+const BASE: Record<string, Omit<Fighter,'buffs'|'debuffs'|'ultUsed'|'secretUltUsed'|'loadedDih'|'fakeJumpUsed'|'yumUsed'>> = {
+  dhariya: { id:'dhariya', name:'Dhariya', emoji:'🥺', color:'#00d4ff', hp:100, maxHp:100, defense:0 },
+  aatharva:{ id:'aatharva',name:'Aatharva',emoji:'🍼', color:'#b44fff', hp:100, maxHp:100, defense:0 },
+  aaditya: { id:'aaditya', name:'Aaditya', emoji:'🎸', color:'#ff2d9b', hp:100, maxHp:100, defense:0 },
+  dweeb:   { id:'dweeb',   name:'Dweeb',  emoji:'🤓', color:'#39ff14', hp:100, maxHp:100, defense:0 },
 }
 
-function makeFighter(id: CharId): Fighter {
-  return {
-    id, ...CHAR_DEFS[id],
-    hp: 100, maxHp: 100, def: 0, atkMult: 1,
-    buffs: [], debuffs: [], turnCount: 0, ultReady: false,
-    loadedDih: false, fatJumpUsed: -99, yumUsed: -99,
-    numbnessActive: false, numbnessStrength: 0,
-    introvertTicks: 0, allMightActive: false,
+function makeFighter(id: string): Fighter {
+  return { ...BASE[id], buffs:[], debuffs:[], ultUsed:false, secretUltUsed:false, loadedDih:false, fakeJumpUsed:-99, yumUsed:-99 }
+}
+
+// ─── Mini-game types ──────────────────────────────────────────────────────────
+type MiniGame =
+  | { type:'rta'; label:string; window:number; onSuccess:()=>void; onFail:()=>void }
+  | { type:'babble'; words:string[]; idx:number; hits:number; onSuccess:()=>void; onFail:()=>void }
+  | { type:'ferrari'; parts:string[]; assembled:string[]; onSuccess:()=>void; onFail:()=>void }
+  | { type:'guitar'; side:'L'|'R'; hits:number; total:number; timeLeft:number; onSuccess:()=>void; onFail:()=>void }
+  | { type:'sharmana'; onSuccess:()=>void; onFail:()=>void }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function clamp(v:number,min:number,max:number){ return Math.max(min,Math.min(max,v)) }
+
+function applyDamage(target: Fighter, rawDmg: number): [Fighter, number] {
+  const absorbed = Math.min(target.defense, rawDmg)
+  const actual = Math.max(0, rawDmg - absorbed)
+  const newDef = Math.max(0, target.defense - absorbed)
+  return [{ ...target, hp: clamp(target.hp - actual, 0, target.maxHp), defense: newDef }, actual]
+}
+
+function applyHeal(target: Fighter, amt: number): Fighter {
+  return { ...target, hp: clamp(target.hp + amt, 0, target.maxHp) }
+}
+
+function addBuff(f: Fighter, b: Buff): Fighter {
+  return { ...f, buffs: [...f.buffs.filter(x=>x.id!==b.id), b] }
+}
+function addDebuff(f: Fighter, d: Debuff): Fighter {
+  return { ...f, debuffs: [...f.debuffs.filter(x=>x.id!==d.id), d] }
+}
+function hasBuff(f: Fighter, id: string){ return f.buffs.some(b=>b.id===id) }
+function hasDebuff(f: Fighter, id: string){ return f.debuffs.some(d=>d.id===id) }
+
+function tickFighter(f: Fighter): [Fighter, LogEntry[]] {
+  const logs: LogEntry[] = []
+  let next = { ...f }
+
+  // linger damage (aaditya introvertedness)
+  if (hasDebuff(next,'linger')) {
+    next = { ...next, hp: clamp(next.hp - 10, 0, next.maxHp) }
+    logs.push({ text:`💔 ${next.name} takes 10 linger damage!`, color:'#ff2d9b' })
   }
+
+  // tick buffs
+  next.buffs = next.buffs.map(b=>({...b,turns:b.turns-1})).filter(b=>b.turns>0)
+  // tick debuffs
+  next.debuffs = next.debuffs.map(d=>({...d,turns:d.turns-1})).filter(d=>d.turns>0)
+  return [next, logs]
 }
 
-function clamp(n: number, min = 0, max = 100) { return Math.max(min, Math.min(max, n)) }
-
-// Apply defense reduction to incoming damage
-function applyDef(dmg: number, def: number) {
-  const reduced = dmg * (1 - def / 100)
-  return Math.max(0, Math.round(reduced))
-}
-
-// ─────────────────────────────────────────────
-// SKILL DEFINITIONS (labels only — logic in reducer)
-// ─────────────────────────────────────────────
-const SKILLS: Record<CharId, { label: string; desc: string; key: string }[]> = {
+// ─── Character skill definitions (metadata only) ─────────────────────────────
+const SKILLS: Record<string, {id:string;label:string;desc:string;icon:string}[]> = {
   dhariya: [
-    { key: 'stalker',  label: '👁️ Stalker Eyes',    desc: '+10% ATK, +15% DEF' },
-    { key: 'slur',     label: '💬 Stuttering Shot',  desc: '15 DMG (1×15 slurs)' },
-    { key: 'babu',     label: '💋 Babu Shona',       desc: 'RTA → 25 DMG' },
-    { key: 'ult',      label: '🌑 CHAATI (ULT)',      desc: '+69% DEF, +30% ATK' },
+    { id:'stalker',   label:'Stalker Eyes',    desc:'+10% ATK, +15% DEF',            icon:'👁️' },
+    { id:'stutter',   label:'Stuttering Shot',  desc:'15 slurs × 1 dmg = 15 dmg',    icon:'💬' },
+    { id:'babu',      label:'Babu Shona',       desc:'RTA flirt — 25 dmg if timed',   icon:'💕' },
+    { id:'chaati',    label:'⚡ CHAATI (ULT)',   desc:'DEF +69%, ATK rate +30%',       icon:'🌑' },
   ],
   aatharva: [
-    { key: 'goon',     label: '🍆 Infertile Gooning', desc: '10 DMG, +20 DEF, Numbness' },
-    { key: 'totla',    label: '👶 Totlapan',          desc: 'RTA → 35 DMG +10 DEF' },
-    { key: 'gay',      label: '🌈 Gayness',           desc: '+20 HP, +10 DEF (heal)' },
-    { key: 'ult',      label: '🍼 GOON GOON GAGA (ULT)', desc: 'Numbness+60%, ATK+30%, DEF+20%' },
+    { id:'goon',      label:'Infertile Gooning',desc:'10 dmg + Numbness buff',        icon:'😵' },
+    { id:'totla',     label:'Totlapan',         desc:'RTA babble — 35 dmg + DEF+10',  icon:'🍼' },
+    { id:'gay',       label:'Gayness',          desc:'Heal self +20 HP, DEF+10',      icon:'🌈' },
+    { id:'goonult',   label:'⚡ GOON GOON GAGA', desc:'Numbness ×60%, ATK+30%, DEF+20%',icon:'👶' },
   ],
   aaditya: [
-    { key: 'sad',      label: '😢 Emotional Sadmapan', desc: 'Introvert buff: 10 DMG/tick ×4' },
-    { key: 'load',     label: '⏳ Loaded Dih',         desc: 'Skip → next: 60% DMG, 2nd Nut' },
-    { key: 'sf90',     label: '🏎️ SF90',               desc: 'Ferrari assembly → 60% DMG + full HP' },
-    { key: 'ult',      label: '🎸 ULTIMATE GITUAR (ULT)', desc: '+40% ATK, +20% DEF, buffs ×2' },
+    { id:'sad',       label:'Emotional Sadmapan',desc:'Introvertedness: 10 linger/5s', icon:'😔' },
+    { id:'loaded',    label:'Loaded Dih',        desc:'Skip → next turn 60% dmg + 2nd Nut',icon:'💀' },
+    { id:'sf90',      label:'SF90',              desc:'Ferrari build — 60% dmg + full heal',icon:'🏎️' },
+    { id:'gitult',    label:'⚡ ULTIMATE GITUAR', desc:'ATK+40%, DEF+20%, buffs ×2',   icon:'🎸' },
   ],
   dweeb: [
-    { key: 'sharma',   label: '🫣 Sharmana',     desc: 'Hide & surprise, RTA 1-click' },
-    { key: 'fatjump',  label: '🏋️ Fat Jump',     desc: '30% DMG, fake once/5 turns (E)' },
-    { key: 'yum',      label: '🍜 Yum',          desc: '59s eating → full HP heal (1/5 turns)' },
-    { key: 'ult',      label: '💪 ALL MIGHT (ULT)', desc: 'Stats ×2, debuffs ÷2' },
+    { id:'sharmana',  label:'Sharmana',          desc:'Hide + surprise 20% dmg',       icon:'🫣' },
+    { id:'fatjump',   label:'Fat Jump',          desc:'30% dmg (or fake with E)',       icon:'💨' },
+    { id:'yum',       label:'Yum',               desc:'59s eat → full heal (1/5 turns)',icon:'🍜' },
+    { id:'allmight',  label:'⚡ ALL MIGHT (ULT)', desc:'Stats ×2, debuffs flip to heals',icon:'💪' },
   ],
 }
 
-// ─────────────────────────────────────────────
-// MINIGAME COMPONENTS
-// ─────────────────────────────────────────────
+// ─── Main component ───────────────────────────────────────────────────────────
+export default function Battle({ onExit }: { onExit: ()=>void }) {
+  const [phase, setPhase] = useState<'select'|'fight'|'over'>('select')
+  const [playerChar, setPlayerChar] = useState<string|null>(null)
+  const [enemyChar,  setEnemyChar]  = useState<string|null>(null)
 
-/** Generic RTA button — click in the green window */
-function RTAGame({ label, onResult }: { label: string; onResult: (success: boolean) => void }) {
-  const [phase, setPhase] = useState<'wait'|'now'|'done'>('wait')
-  const [result, setResult] = useState<boolean|null>(null)
-  const waitRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const windowRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    const delay = 1000 + Math.random() * 2000
-    waitRef.current = setTimeout(() => {
-      setPhase('now')
-      windowRef.current = setTimeout(() => {
-        setPhase('done'); setResult(false); onResult(false)
-      }, 800)
-    }, delay)
-    return () => { clearTimeout(waitRef.current ?? undefined); clearTimeout(windowRef.current ?? undefined) }
-  }, [])
-
-  const handleClick = () => {
-    if (phase !== 'now') { clearTimeout(waitRef.current ?? undefined); setPhase('done'); setResult(false); onResult(false); return }
-    clearTimeout(windowRef.current ?? undefined); setPhase('done'); setResult(true); onResult(true)
-  }
-
-  return (
-    <div className="mg-rta">
-      <p className="mg-label">{label}</p>
-      <motion.button
-        className={`mg-rta-btn ${
-          phase === 'wait' ? 'mg-rta-wait' :
-          phase === 'now'  ? 'mg-rta-now'  : result ? 'mg-rta-hit' : 'mg-rta-miss'
-        }`}
-        onClick={handleClick}
-        whileTap={{ scale: 0.92 }}
-        disabled={phase === 'done'}
-      >
-        {phase === 'wait' ? 'WAIT...' : phase === 'now' ? '⚡ CLICK NOW!' : result ? '✅ HIT!' : '❌ MISS!'}
-      </motion.button>
-      {phase === 'done' && <p className="mg-result">{result ? 'Perfect timing! 💥' : 'Too slow! Turn wasted.'}</p>}
-    </div>
-  )
-}
-
-/** SF90 Ferrari assembly — cross layout */
-function SF90Game({ onResult }: { onResult: (success: boolean) => void }) {
-  const PARTS = ['body','frontwing','spoiler','wheels'] as const
-  type Part = typeof PARTS[number]
-  const [placed, setPlaced] = useState<Set<Part>>(new Set())
-  const [timeLeft, setTimeLeft] = useState(60)
-  const [done, setDone] = useState(false)
-  const [success, setSuccess] = useState(false)
-
-  useEffect(() => {
-    if (done) return
-    const t = setInterval(() => setTimeLeft(s => {
-      if (s <= 1) { clearInterval(t); if (!done) { setDone(true); setSuccess(false); onResult(false) } return 0 }
-      return s - 1
-    }), 1000)
-    return () => clearInterval(t)
-  }, [done])
-
-  const place = (part: Part) => {
-    if (done || placed.has(part)) return
-    const next = new Set(placed)
-    next.add(part)
-    setPlaced(next)
-  }
-
-  const allPlaced = PARTS.every(p => placed.has(p))
-
-  const confirm = () => {
-    if (!allPlaced || done) return
-    setDone(true); setSuccess(true); onResult(true)
-  }
-
-  return (
-    <div className="mg-sf90">
-      <div className="sf90-timer" style={{ color: timeLeft < 15 ? '#ff2d9b' : '#ffd700' }}>
-        ⏱ {timeLeft}s
-      </div>
-      <p className="mg-label">🏎️ Assemble the Ferrari SF90!</p>
-      <div className="sf90-cross">
-        {/* TOP — body */}
-        <div className="sf90-slot sf90-top">
-          <button className={`sf90-part-btn ${placed.has('body') ? 'sf90-placed' : ''}`}
-            onClick={() => place('body')} disabled={placed.has('body') || done}>
-            {placed.has('body') ? '✅' : '🚗'} Body
-          </button>
-        </div>
-        {/* MIDDLE ROW */}
-        <div className="sf90-middle-row">
-          <div className="sf90-slot sf90-left">
-            <button className={`sf90-part-btn ${placed.has('frontwing') ? 'sf90-placed' : ''}`}
-              onClick={() => place('frontwing')} disabled={placed.has('frontwing') || done}>
-              {placed.has('frontwing') ? '✅' : '🔩'} Front Wing
-            </button>
-          </div>
-          <div className="sf90-centre">
-            {allPlaced && !done
-              ? <motion.button className="sf90-confirm" onClick={confirm}
-                  animate={{ scale: [1,1.08,1] }} transition={{ repeat: Infinity, duration: 0.6 }}>
-                  🔥 CONFIRM!
-                </motion.button>
-              : <div className="sf90-car-icon">{placed.size}/4</div>
-            }
-          </div>
-          <div className="sf90-slot sf90-right">
-            <button className={`sf90-part-btn ${placed.has('spoiler') ? 'sf90-placed' : ''}`}
-              onClick={() => place('spoiler')} disabled={placed.has('spoiler') || done}>
-              {placed.has('spoiler') ? '✅' : '💨'} Spoiler
-            </button>
-          </div>
-        </div>
-        {/* BOTTOM — wheels */}
-        <div className="sf90-slot sf90-bottom">
-          <button className={`sf90-part-btn ${placed.has('wheels') ? 'sf90-placed' : ''}`}
-            onClick={() => place('wheels')} disabled={placed.has('wheels') || done}>
-            {placed.has('wheels') ? '✅' : '🛞'} Wheels
-          </button>
-        </div>
-      </div>
-      {done && (
-        <motion.div className={`sf90-result ${success ? 'sf90-win' : 'sf90-lose'}`}
-          initial={{ scale: 0 }} animate={{ scale: 1 }}>
-          {success ? '🏎️ A TRUE MERCEDES FAN!' : '😢 Carlos Sainz 2023 Las Vegas...'}
-        </motion.div>
-      )}
-    </div>
-  )
-}
-
-/** Guitar Gooning — rapid alternating L/R clicks for 60s */
-function GuitarGoonGame({ onResult }: { onResult: (success: boolean) => void }) {
-  const [side, setSide] = useState<'L'|'R'>('L')
-  const [hits, setHits] = useState(0)
-  const [timeLeft, setTimeLeft] = useState(60)
-  const [done, setDone] = useState(false)
-  const [missed, setMissed] = useState(false)
-  const TARGET = 40 // hits needed to win
-
-  useEffect(() => {
-    if (done) return
-    const t = setInterval(() => setTimeLeft(s => {
-      if (s <= 1) { clearInterval(t); setDone(true); onResult(false); return 0 }
-      return s - 1
-    }), 1000)
-    return () => clearInterval(t)
-  }, [done])
-
-  const hit = (clickSide: 'L'|'R') => {
-    if (done) return
-    if (clickSide !== side) { setMissed(true); setTimeout(() => setMissed(false), 300); return }
-    const next = hits + 1
-    setHits(next)
-    setSide(s => s === 'L' ? 'R' : 'L')
-    if (next >= TARGET) { setDone(true); onResult(true) }
-  }
-
-  return (
-    <div className="mg-guitar">
-      <p className="mg-label">🎸 GUITAR GOONING — alternate L & R! ({TARGET} hits to win)</p>
-      <div className="guitar-stats">
-        <span style={{ color: '#ffd700' }}>⏱ {timeLeft}s</span>
-        <span style={{ color: '#ff2d9b' }}>Hits: {hits}/{TARGET}</span>
-      </div>
-      {done
-        ? <div className="mg-result">{hits >= TARGET ? '🎸 INSTANT KNOCKOUT!' : '💀 YOU WERE ELIMINATED!'}</div>
-        : <div className="guitar-btns">
-            <motion.button
-              className={`guitar-btn ${side==='L'?'guitar-active':''} ${missed?'guitar-miss':''}`}
-              onClick={() => hit('L')} whileTap={{ scale: 0.9 }}>
-              ← L
-            </motion.button>
-            <motion.button
-              className={`guitar-btn ${side==='R'?'guitar-active':''} ${missed?'guitar-miss':''}`}
-              onClick={() => hit('R')} whileTap={{ scale: 0.9 }}>
-              R →
-            </motion.button>
-          </div>
-      }
-    </div>
-  )
-}
-
-/** Sharmana — 1 click RTA */
-function SharmanaGame({ onResult }: { onResult: (success: boolean) => void }) {
-  return <RTAGame label="🫣 Sharmana — click when the shadow appears!" onResult={onResult} />
-}
-
-/** Yum — 59s eating wait */
-function YumGame({ onResult }: { onResult: () => void }) {
-  const [timeLeft, setTimeLeft] = useState(59)
-  useEffect(() => {
-    const t = setInterval(() => setTimeLeft(s => {
-      if (s <= 1) { clearInterval(t); onResult(); return 0 }
-      return s - 1
-    }), 1000)
-    return () => clearInterval(t)
-  }, [])
-  return (
-    <div className="mg-yum">
-      <div className="yum-emoji">🍜</div>
-      <p className="mg-label">Dweeb is eating ramen... please wait.</p>
-      <div className="yum-timer">{timeLeft}s</div>
-      <p style={{ fontSize:'0.7rem', color:'rgba(255,255,255,0.3)', fontFamily:'monospace' }}>your opponent is just standing there</p>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────
-// BATTLE LOG
-// ─────────────────────────────────────────────
-function BattleLog({ lines }: { lines: string[] }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => { ref.current?.scrollTo(0, ref.current.scrollHeight) }, [lines])
-  return (
-    <div className="battle-log" ref={ref}>
-      {lines.map((l, i) => <div key={i} className="log-line">{l}</div>)}
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────
-// HP BAR
-// ─────────────────────────────────────────────
-function HpBar({ fighter, isPlayer }: { fighter: Fighter; isPlayer: boolean }) {
-  const pct = Math.max(0, (fighter.hp / fighter.maxHp) * 100)
-  const col = pct > 50 ? '#39ff14' : pct > 25 ? '#ffd700' : '#ff2d9b'
-  return (
-    <div className={`hpbar-wrap ${isPlayer ? 'hpbar-player' : 'hpbar-enemy'}`}
-      style={{ '--cc': fighter.color } as any}>
-      <div className="hpbar-header">
-        <span className="hpbar-emoji">{fighter.emoji}</span>
-        <span className="hpbar-name" style={{ color: fighter.color, textShadow: `0 0 10px ${fighter.color}` }}>
-          {fighter.name}
-        </span>
-        <span className="hpbar-hp">{Math.max(0,fighter.hp)}/{fighter.maxHp}</span>
-      </div>
-      <div className="hpbar-bg">
-        <motion.div className="hpbar-fill"
-          style={{ background: col, boxShadow: `0 0 8px ${col}` }}
-          animate={{ width: `${pct}%` }} transition={{ duration: 0.4 }} />
-      </div>
-      <div className="hpbar-stats">
-        <span>DEF: {Math.round(fighter.def)}%</span>
-        <span>ATK: ×{fighter.atkMult.toFixed(1)}</span>
-        {fighter.numbnessActive && <span className="buff-tag">NUMB {fighter.numbnessStrength}%</span>}
-        {fighter.introvertTicks > 0 && <span className="debuff-tag">INTRO ×{fighter.introvertTicks}</span>}
-        {fighter.loadedDih && <span className="buff-tag">LOADED 💥</span>}
-        {fighter.allMightActive && <span className="buff-tag">ALL MIGHT 💪</span>}
-        {fighter.ultReady && <span className="ult-tag">ULT READY ⚡</span>}
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────
-// MAIN BATTLE COMPONENT
-// ─────────────────────────────────────────────
-export default function Battle({ onExit }: { onExit: () => void }) {
-  const ALL: CharId[] = ['aaditya','aatharva','dhariya','dweeb']
-
-  const [phase, setPhase] = useState<Phase>('select')
-  const [playerChar, setPlayerChar] = useState<CharId|null>(null)
   const [player, setPlayer] = useState<Fighter|null>(null)
-  const [enemy, setEnemy] = useState<Fighter|null>(null)
-  const [enemies, setEnemies] = useState<Fighter[]>([])   // queue
-  const [enemyIdx, setEnemyIdx] = useState(0)
-  const [log, setLog] = useState<string[]>([])
-  const [minigame, setMinigame] = useState<MinigameType>(null)
-  const [playerTurn, setPlayerTurn] = useState(true)
-  const [winner, setWinner] = useState<'player'|'enemy'|null>(null)
-  const [pendingSkill, setPendingSkill] = useState<string|null>(null)
-  const [fatJumpPending, setFatJumpPending] = useState(false)
-  const [introTickInterval, setIntroTickInterval] = useState<ReturnType<typeof setInterval>|null>(null)
+  const [enemy,  setEnemy]  = useState<Fighter|null>(null)
+  const [turn,   setTurn]   = useState<'player'|'enemy'>('player')
+  const [turnNum, setTurnNum] = useState(0)
+  const [log,    setLog]    = useState<LogEntry[]>([])
+  const [mini,   setMini]   = useState<MiniGame|null>(null)
+  const [winner, setWinner] = useState<string|null>(null)
+  const [msg,    setMsg]    = useState<string>('')
+  const [msgColor, setMsgColor] = useState('#ffd700')
+  const [loadedCharge, setLoadedCharge] = useState(false)
+  const logRef = useRef<HTMLDivElement>(null)
 
-  const addLog = (msg: string) => setLog(l => [...l, msg])
+  const chars = Object.keys(BASE)
 
-  // ── helpers ──
-  const dealDamage = useCallback((target: Fighter, rawDmg: number, setTarget: (f:Fighter)=>void, label='') => {
-    let dmg = rawDmg
-    // numbness on target reduces incoming
-    if (target.numbnessActive) dmg = Math.round(dmg * (1 - target.numbnessStrength/100))
-    // all might: debuffs doubled if active
-    const actual = applyDef(dmg, target.def)
-    const newHp = clamp(target.hp - actual)
-    setTarget({ ...target, hp: newHp })
-    addLog(`💥 ${label || ''} ${actual} damage dealt! (${target.name}: ${target.hp}→${newHp} HP)`)
-    return newHp
+  // scroll log
+  useEffect(()=>{ logRef.current?.scrollTo(0,9999) },[log])
+
+  function pushLog(entries: LogEntry[]) {
+    setLog(l => [...l.slice(-40), ...entries])
+  }
+  function flash(text:string, color='#ffd700') {
+    setMsg(text); setMsgColor(color)
+    setTimeout(()=>setMsg(''),2200)
+  }
+
+  // ─── Start fight ────────────────────────────────────────────────────────────
+  function startFight(pc: string, ec: string) {
+    setPlayer(makeFighter(pc))
+    setEnemy(makeFighter(ec))
+    setTurn('player')
+    setTurnNum(0)
+    setLog([{ text:`⚔️ STAND BATTLE: ${BASE[pc].name} vs ${BASE[ec].name}!`, color:'#ffd700' }])
+    setPhase('fight')
+  }
+
+  // ─── Check win ──────────────────────────────────────────────────────────────
+  function checkWin(p: Fighter, e: Fighter): boolean {
+    if (e.hp <= 0) { setWinner(p.name); setPhase('over'); return true }
+    if (p.hp <= 0) { setWinner(e.name); setPhase('over'); return true }
+    return false
+  }
+
+  // ─── Enemy AI ───────────────────────────────────────────────────────────────
+  const enemyTurn = useCallback((p: Fighter, e: Fighter, tn: number) => {
+    const skills = SKILLS[e.id]
+    const available = skills.filter(s => {
+      if (s.id.endsWith('ult')) return !e.ultUsed
+      return true
+    })
+    const pick = available[Math.floor(Math.random() * available.length)]
+    let np = { ...p }, ne = { ...e }
+    const logs: LogEntry[] = [{ text:`🤖 ${e.name} uses ${pick.label}!`, color: e.color }]
+
+    // simple AI execution (no mini-games for AI, just raw values)
+    switch(pick.id) {
+      // dhariya
+      case 'stalker': ne = addBuff(ne,{id:'stalker',label:'Stalker Eyes',value:10,turns:4}); ne.defense=Math.min(100,ne.defense+15); break
+      case 'stutter': { const [np2]=applyDamage(np,15); np=np2; logs.push({text:`💥 15 slur damage!`,color:'#ff4444'}) } break
+      case 'babu':    { const [np2]=applyDamage(np,12); np=np2; logs.push({text:`💕 Flirt hit for 12!`,color:'#ff2d9b'}) } break
+      case 'chaati':  ne.defense=Math.min(100,ne.defense+25); ne=addBuff(ne,{id:'chaati',label:'CHAATI',value:30,turns:5}); ne.ultUsed=true; logs.push({text:`🌑 CHAATI activated!`,color:'#00d4ff'}); break
+      // aatharva
+      case 'goon':    { const [np2]=applyDamage(np,10); np=np2; ne.defense=Math.min(100,ne.defense+20); ne=addBuff(ne,{id:'numb',label:'Numbness',value:20,turns:4}) } break
+      case 'totla':   { const [np2]=applyDamage(np,25); np=np2; ne.defense=Math.min(100,ne.defense+10) } break
+      case 'gay':     ne=applyHeal(ne,20); ne.defense=Math.min(100,ne.defense+10); break
+      case 'goonult': ne=addBuff(ne,{id:'goonult',label:'GOON×',value:60,turns:5}); ne.defense=Math.min(100,ne.defense+20); ne.ultUsed=true; break
+      // aaditya (nerfed for AI)
+      case 'sad':     np=addDebuff(np,{id:'linger',label:'Linger',value:10,turns:5}); break
+      case 'loaded':  { const [np2]=applyDamage(np,30); np=np2 } break // nerfed
+      case 'sf90':    { const [np2]=applyDamage(np,35); np=np2 } break // nerfed
+      case 'gitult':  ne=addBuff(ne,{id:'gitult',label:'GITUAR',value:40,turns:5}); ne.ultUsed=true; break
+      // dweeb
+      case 'sharmana':{ const [np2]=applyDamage(np,20); np=np2 } break
+      case 'fatjump': { const [np2]=applyDamage(np,30); np=np2 } break
+      case 'yum':     ne=applyHeal(ne,50); break
+      case 'allmight':ne=addBuff(ne,{id:'allmight',label:'ALL MIGHT',value:2,turns:6}); ne.ultUsed=true; break
+    }
+
+    const [tp, tpLogs] = tickFighter(np)
+    const [te, teLogs] = tickFighter(ne)
+    logs.push(...tpLogs,...teLogs)
+    pushLog(logs)
+    if (!checkWin(tp,te)) {
+      setPlayer(tp); setEnemy(te)
+      setTurn('player'); setTurnNum(tn+1)
+    }
   }, [])
 
-  const healTarget = (target: Fighter, amount: number, setTarget:(f:Fighter)=>void, label='') => {
-    const newHp = clamp(target.hp + amount, 0, target.maxHp)
-    setTarget({ ...target, hp: newHp })
-    addLog(`💚 ${label} +${amount} HP (${target.name}: ${target.hp}→${newHp} HP)`)
-  }
+  // ─── Player skill use ────────────────────────────────────────────────────────
+  function useSkill(skillId: string) {
+    if (!player || !enemy || turn !== 'player' || mini) return
+    const p = { ...player }, e = { ...enemy }
 
-  // Check win/loss
-  const checkEnd = useCallback((p: Fighter, e: Fighter) => {
-    if (e.hp <= 0) {
-      if (enemyIdx + 1 >= enemies.length) {
-        setWinner('player'); setPhase('gameover')
-      } else {
-        const nextIdx = enemyIdx + 1
-        setEnemyIdx(nextIdx)
-        setEnemy({ ...enemies[nextIdx] })
-        addLog(`🔥 ${e.name} defeated! Next: ${enemies[nextIdx].name}!`)
+    // ATK multiplier from buffs
+    const atkMult = 1
+      + (hasBuff(p,'stalker') ? 0.10 : 0)
+      + (hasBuff(p,'gitult')  ? 0.40 : 0)
+      + (hasBuff(p,'goonult') ? 0.30 : 0)
+      + (hasBuff(p,'chaati')  ? 0.30 : 0)
+      + (hasBuff(p,'allmight')? 1.00 : 0)
+
+    function finishTurn(np: Fighter, ne: Fighter, extraLogs: LogEntry[] = []) {
+      const [tp, tpLogs] = tickFighter(np)
+      const [te, teLogs] = tickFighter(ne)
+      const all = [...extraLogs, ...tpLogs, ...teLogs]
+      pushLog(all)
+      if (!checkWin(tp, te)) {
+        setPlayer(tp); setEnemy(te)
+        setTurn('enemy')
+        setTimeout(() => enemyTurn(tp, te, turnNum + 1), 1200)
       }
     }
-    if (p.hp <= 0) { setWinner('enemy'); setPhase('gameover') }
-  }, [enemies, enemyIdx])
 
-  // ── Start battle ──
-  const startBattle = (charId: CharId) => {
-    setPlayerChar(charId)
-    const others = ALL.filter(c => c !== charId)
-    const shuffled = [...others].sort(() => Math.random()-0.5)
-    const queue = shuffled.map(makeFighter)
-    setEnemies(queue)
-    setPlayer(makeFighter(charId))
-    setEnemy({ ...queue[0] })
-    setEnemyIdx(0)
-    setLog([`⚔️ Battle start! ${CHAR_DEFS[charId].name} vs ${queue.map(q=>q.name).join(', ')}!`])
-    setPhase('fight')
-    setPlayerTurn(true)
-  }
-
-  // ── Tick introverted damage ──
-  useEffect(() => {
-    if (!player || !enemy || player.introvertTicks <= 0) return
-    const t = setInterval(() => {
-      setEnemy(e => {
-        if (!e) return e!
-        const newHp = clamp(e.hp - 10)
-        addLog(`😢 Introvert lingering: 10 dmg to ${e.name}! (${e.hp}→${newHp})`)
-        return { ...e, hp: newHp }
+    // ── DHARIYA ──────────────────────────────────────────────────────────────
+    if (skillId === 'stalker') {
+      const np = addBuff({ ...p, defense: Math.min(100, p.defense + 15) }, {id:'stalker',label:'Stalker Eyes',value:10,turns:4})
+      pushLog([{text:`👁️ Dhariya activates STALKER EYES! ATK+10% DEF+15`,color:'#00d4ff'}])
+      finishTurn(np, e)
+    }
+    else if (skillId === 'stutter') {
+      const dmg = Math.round(15 * atkMult)
+      const [ne, actual] = applyDamage(e, dmg)
+      pushLog([{text:`💬 STUTTERING SHOT! 15 slurs fire — ${actual} damage!`,color:'#00d4ff'}])
+      finishTurn(p, ne)
+    }
+    else if (skillId === 'babu') {
+      setMini({
+        type:'rta', label:'💕 BABU SHONA — click the heart at the right moment!', window:800,
+        onSuccess: () => {
+          const dmg = Math.round(25 * atkMult)
+          const [ne, actual] = applyDamage(e, dmg)
+          flash(`💕 FLIRT LANDED! ${actual} damage!`, '#ff2d9b')
+          pushLog([{text:`💕 Babu Shona hit for ${actual}!`,color:'#ff2d9b'}])
+          setMini(null); finishTurn(p, ne)
+        },
+        onFail: () => {
+          flash('💔 Flirt failed... turn wasted', '#888')
+          pushLog([{text:`💔 Babu Shona missed — turn wasted`,color:'#888'}])
+          setMini(null); finishTurn(p, e)
+        }
       })
-      setPlayer(p => {
-        if (!p) return p!
-        const ticks = p.introvertTicks - 1
-        return { ...p, introvertTicks: ticks }
+    }
+    else if (skillId === 'chaati') {
+      if (p.ultUsed) { flash('⚡ Ultimate already used!','#888'); return }
+      const np = addBuff({ ...p, defense: Math.min(100, p.defense + 40), ultUsed: true },
+        {id:'chaati',label:'CHAATI',value:30,turns:6})
+      flash('🌑 CHAATI ACTIVATED — Gaurav has arrived!', '#00d4ff')
+      pushLog([{text:`🌑 CHAATI: DEF+40, ATK+30%, Gaurav watches over you!`,color:'#00d4ff'}])
+      finishTurn(np, e)
+    }
+
+    // ── AATHARVA ─────────────────────────────────────────────────────────────
+    else if (skillId === 'goon') {
+      const dmg = Math.round(10 * atkMult)
+      const [ne, actual] = applyDamage(e, dmg)
+      const np = addBuff({ ...p, defense: Math.min(100, p.defense + 20) }, {id:'numb',label:'Numbness',value:20,turns:4})
+      pushLog([{text:`😵 INFERTILE GOONING — ${actual} dmg + Numbness active!`,color:'#b44fff'}])
+      finishTurn(np, ne)
+    }
+    else if (skillId === 'totla') {
+      const words = ['lu','calnot','tolk','tlo','mle','lai','diz','baba','goo','wawa']
+      setMini({
+        type:'babble', words, idx:0, hits:0,
+        onSuccess: () => {
+          const dmg = Math.round(35 * atkMult)
+          const [ne, actual] = applyDamage(e, dmg)
+          const np = { ...p, defense: Math.min(100, p.defense + 10) }
+          flash(`🍼 TOTLAPAN HIT! ${actual} dmg!`, '#b44fff')
+          pushLog([{text:`🍼 Totlapan babble landed — ${actual} dmg, DEF+10`,color:'#b44fff'}])
+          setMini(null); finishTurn(np, ne)
+        },
+        onFail: () => {
+          flash('🍼 Babble failed — turn wasted', '#888')
+          pushLog([{text:`🍼 Totlapan failed — turn wasted`,color:'#888'}])
+          setMini(null); finishTurn(p, e)
+        }
       })
-    }, 5000)
-    return () => clearInterval(t)
-  }, [player?.introvertTicks])
-
-  // ── Enemy AI turn ──
-  const enemyTurn = useCallback((p: Fighter, e: Fighter) => {
-    if (!p || !e) return
-    setTimeout(() => {
-      const skills = SKILLS[e.id].filter(s => s.key !== 'ult')
-      const pick = skills[Math.floor(Math.random()*skills.length)]
-      let dmg = 0
-      let newP = { ...p }
-      let newE = { ...e }
-
-      // simple AI — just deal damage based on skill
-      switch(e.id) {
-        case 'dhariya':
-          if (pick.key==='stalker') { newE.atkMult+=0.1; newE.def=clamp(newE.def+15); addLog(`👁️ ${e.name} used Stalker Eyes! ATK+10%, DEF+15%`) }
-          else if (pick.key==='slur') { dmg=15; addLog(`💬 ${e.name} used Stuttering Shot! 15 DMG`) }
-          else { dmg=25; addLog(`💋 ${e.name} used Babu Shona! 25 DMG`) }
-          break
-        case 'aatharva':
-          if (pick.key==='goon') { dmg=10; newE.def=clamp(newE.def+20); newE.numbnessActive=true; newE.numbnessStrength=clamp(newE.numbnessStrength+20); addLog(`🍆 ${e.name} used Infertile Gooning! 10 DMG, DEF+20, Numbness!`) }
-          else if (pick.key==='totla') { dmg=35; newE.def=clamp(newE.def+10); addLog(`👶 ${e.name} used Totlapan! 35 DMG`) }
-          else { newE.hp=clamp(newE.hp+20,0,newE.maxHp); newE.def=clamp(newE.def+10); addLog(`🌈 ${e.name} used Gayness! Healed 20 HP`) }
-          break
-        case 'aaditya':
-          if (pick.key==='sad') { newE.introvertTicks=4; addLog(`😢 ${e.name} used Emotional Sadmapan! Introvert ×4 ticks`) }
-          else if (pick.key==='load') { addLog(`⏳ ${e.name} is loading...`); newE.loadedDih=true }
-          else { dmg=30; addLog(`🏎️ ${e.name} used SF90! 30 DMG`) }
-          break
-        case 'dweeb':
-          if (pick.key==='sharma') { dmg=20; addLog(`🫣 ${e.name} used Sharmana! 20 DMG`) }
-          else if (pick.key==='fatjump') { dmg=30; addLog(`🏋️ ${e.name} used Fat Jump! 30 DMG`) }
-          else { newE.hp=clamp(newE.hp+100,0,newE.maxHp); addLog(`🍜 ${e.name} used Yum! Full HP restored`) }
-          break
+    }
+    else if (skillId === 'gay') {
+      const np = applyHeal({ ...p, defense: Math.min(100, p.defense + 10) }, 20)
+      pushLog([{text:`🌈 GAYNESS — healed 20 HP, DEF+10`,color:'#b44fff'}])
+      finishTurn(np, e)
+    }
+    else if (skillId === 'goonult') {
+      if (p.ultUsed) { flash('⚡ Ultimate already used!','#888'); return }
+      // secret ult check
+      if (e.id === 'aaditya' && !p.secretUltUsed) {
+        flash('🎸 SECRET ULTIMATE UNLOCKED — GITAUR GOONING!', '#ffd700')
+        const total = 20
+        setMini({
+          type:'guitar', side:'L', hits:0, total, timeLeft:60,
+          onSuccess: () => {
+            flash('🎸 GITAUR GOONING — INSTANT KNOCKOUT!','#ffd700')
+            pushLog([{text:`🎸 GITAUR GOONING SUCCESS — INSTANT KO!`,color:'#ffd700'}])
+            const ne = { ...e, hp: 0 }
+            setMini(null); setPlayer({...p,secretUltUsed:true}); setEnemy(ne)
+            checkWin({...p,secretUltUsed:true}, ne)
+          },
+          onFail: () => {
+            flash('🎸 Gitaur Gooning failed — YOU are eliminated!','#ff4444')
+            pushLog([{text:`🎸 GITAUR GOONING FAILED — player eliminated!`,color:'#ff4444'}])
+            const np2 = { ...p, hp: 0, secretUltUsed: true }
+            setMini(null); setPlayer(np2); checkWin(np2, e)
+          }
+        })
+        return
       }
-
-      if (dmg > 0) {
-        const base = Math.round(dmg * newE.atkMult)
-        const actual = applyDef(base, newP.def)
-        newP.hp = clamp(newP.hp - actual)
-        addLog(`💥 ${actual} damage to ${p.name}!`)
-      }
-
-      setPlayer(newP)
-      setEnemy(newE)
-      checkEnd(newP, newE)
-      setPlayerTurn(true)
-    }, 1200)
-  }, [checkEnd])
-
-  // ── Player skill handler ──
-  const useSkill = (skillKey: string) => {
-    if (!playerTurn || !player || !enemy || minigame) return
-    const p = { ...player }
-    const e = { ...enemy }
-
-    // Check ult
-    if (skillKey === 'ult') {
-      if (!p.ultReady) { addLog('⚡ Ultimate not ready yet!'); return }
-      p.ultReady = false
+      const np = addBuff({ ...p, defense: Math.min(100, p.defense + 20), ultUsed: true },
+        {id:'goonult',label:'GOON×',value:60,turns:5})
+      flash('👶 GOON GOON GAGA — maximum baby power!','#b44fff')
+      pushLog([{text:`👶 GOON GOON GAGA: Numbness ×60%, ATK+30%, DEF+20%`,color:'#b44fff'}])
+      finishTurn(np, e)
     }
 
-    // Check secret ultimate condition
-    const isSecretUlt = (skillKey === 'ult') &&
-      ((p.id==='aaditya' && e.id==='aatharva') || (p.id==='aatharva' && e.id==='aaditya'))
-
-    if (isSecretUlt) {
-      addLog(`🎸 SECRET ULTIMATE UNLOCKED — GUITAR GOONING!`)
-      setMinigame('guitar_goon')
-      setPendingSkill('guitar_goon')
-      return
+    // ── AADITYA ──────────────────────────────────────────────────────────────
+    else if (skillId === 'sad') {
+      const ne = addDebuff(e, {id:'linger',label:'Linger',value:10,turns:5})
+      pushLog([{text:`😔 EMOTIONAL SADMAPAN — Introvertedness applied! 10 linger dmg/turn`,color:'#ff2d9b'}])
+      finishTurn(p, ne)
     }
-
-    // Tick up turn counter
-    p.turnCount += 1
-    if (p.turnCount % 5 === 0) p.ultReady = true
-
-    let skipEnemyTurn = false
-    let newP = { ...p }
-    let newE = { ...e }
-
-    // ── DHARIYA ──
-    if (p.id === 'dhariya') {
-      if (skillKey==='stalker') {
-        newP.atkMult = +(newP.atkMult + 0.1).toFixed(2)
-        newP.def = clamp(newP.def + 15)
-        addLog(`👁️ Stalker Eyes! Realised he's been stalking Yoshi Yoshi. ATK+10%, DEF+15%`)
-      } else if (skillKey==='slur') {
-        const dmg = Math.round(15 * newP.atkMult)
-        const actual = applyDef(dmg, newE.def)
-        newE.hp = clamp(newE.hp - actual)
-        addLog(`💬 Stuttering Shot! 15 slurs fired! ${actual} DMG to ${e.name}!`)
-      } else if (skillKey==='babu') {
-        setMinigame('rta_babu'); setPendingSkill('babu'); return
-      } else if (skillKey==='ult') {
-        newP.def = clamp(newP.def + 69)
-        newP.atkMult = +(newP.atkMult * 1.3).toFixed(2)
-        addLog(`🌑 CHAATI! Gaurav appears! DEF+69%, ATK+30%!`)
+    else if (skillId === 'loaded') {
+      if (loadedCharge) {
+        // release
+        const base = Math.round(p.maxHp * 0.45) // nerfed: 45% not 60%
+        const dmg  = Math.round(base * atkMult)
+        const selfDmg = Math.round(dmg * 0.30)
+        const [ne, actual] = applyDamage(e, dmg)
+        const [np2] = applyDamage(p, selfDmg)
+        setLoadedCharge(false)
+        pushLog([{text:`💀 LOADED DIH RELEASED — ${actual} dmg! Self: ${selfDmg} (2nd Nut)`,color:'#ff2d9b'}])
+        finishTurn(np2, ne)
+      } else {
+        setLoadedCharge(true)
+        pushLog([{text:`💀 Loaded Dih charging... next turn it fires!`,color:'#ff8800'}])
+        finishTurn(p, e)
       }
     }
-
-    // ── AATHARVA ──
-    if (p.id === 'aatharva') {
-      if (skillKey==='goon') {
-        const dmg = Math.round(10 * newP.atkMult)
-        const actual = applyDef(dmg, newE.def)
-        newE.hp = clamp(newE.hp - actual)
-        newP.def = clamp(newP.def + 20)
-        newP.numbnessActive = true
-        newP.numbnessStrength = clamp(newP.numbnessStrength + 20)
-        addLog(`🍆 Infertile Gooning! Gooned twice, dih hurts. ${actual} DMG, +20 DEF, Numbness active!`)
-      } else if (skillKey==='totla') {
-        setMinigame('rta_totlapan'); setPendingSkill('totla'); return
-      } else if (skillKey==='gay') {
-        newP.hp = clamp(newP.hp + 20, 0, newP.maxHp)
-        newP.def = clamp(newP.def + 10)
-        addLog(`🌈 Gayness! No damage — healed 20 HP, +10 DEF!`)
-      } else if (skillKey==='ult') {
-        newP.numbnessStrength = clamp(newP.numbnessStrength + 60)
-        newP.atkMult = +(newP.atkMult * 1.3).toFixed(2)
-        newP.def = clamp(newP.def + 20)
-        addLog(`🍼 GOON GOON GAGA! Numbness+60%, ATK+30%, DEF+20%!`)
-      }
-    }
-
-    // ── AADITYA ──
-    if (p.id === 'aaditya') {
-      if (skillKey==='sad') {
-        newP.introvertTicks = 4
-        addLog(`😢 Emotional Sadmapan! So lonely... Introvert buff: 10 DMG/tick for 4 ticks!`)
-      } else if (skillKey==='load') {
-        if (newP.loadedDih) {
-          // Release the load
-          const base = Math.round(newE.maxHp * 0.6)
-          const actual = applyDef(base, newE.def)
-          newE.hp = clamp(newE.hp - actual)
-          const selfDmg = Math.round(base * 0.3)
-          newP.hp = clamp(newP.hp - selfDmg)
-          newP.loadedDih = false
-          addLog(`💥 LOADED DIH RELEASED! ${actual} DMG to ${e.name}! 2nd Nut: ${selfDmg} self-damage!`)
-        } else {
-          newP.loadedDih = true
-          addLog(`⏳ Loaded Dih — loading up... next turn will RELEASE!`)
-          skipEnemyTurn = false // enemy still gets turn
+    else if (skillId === 'sf90') {
+      const PARTS = ['Body 🚗','Wheels 🛞','Spoiler 🏁','Front Wing ✈️']
+      setMini({
+        type:'ferrari', parts:PARTS, assembled:[],
+        onSuccess: () => {
+          const dmg = Math.round(p.maxHp * 0.45 * atkMult) // nerfed: 45%
+          const [ne, actual] = applyDamage(e, dmg)
+          const np2 = { ...p, hp: p.maxHp }
+          flash('🏎️ A TRUE MERCEDES FAN! Ferrari built — ' + actual + ' damage!', '#39ff14')
+          pushLog([{text:`🏎️ SF90 SUCCESS — ${actual} dmg, full heal! A TRUE MERCEDES FAN!`,color:'#39ff14'}])
+          setMini(null); finishTurn(np2, ne)
+        },
+        onFail: () => {
+          const selfDmg = Math.round(p.maxHp * 0.30)
+          const [np2] = applyDamage({ ...p, defense: Math.max(0, p.defense - 40) }, selfDmg)
+          flash('💥 Carlos Sainz 2023 Las Vegas...', '#888')
+          pushLog([{text:`💥 SF90 FAILED — Carlos Sainz 2023 Las Vegas... ${selfDmg} self dmg, DEF-40`,color:'#888'}])
+          setMini(null); finishTurn(np2, e)
         }
-      } else if (skillKey==='sf90') {
-        setMinigame('sf90'); setPendingSkill('sf90'); return
-      } else if (skillKey==='ult') {
-        newP.atkMult = +(newP.atkMult * 1.4).toFixed(2)
-        newP.def = clamp(newP.def + 20)
-        newP.buffs = newP.buffs.map(b => ({ ...b, value: b.value * 2 }))
-        addLog(`🎸 ULTIMATE GITUAR! ATK+40%, DEF+20%, all buffs ×2!`)
+      })
+    }
+    else if (skillId === 'gitult') {
+      if (p.ultUsed) { flash('⚡ Ultimate already used!','#888'); return }
+      // secret ult check
+      if (e.id === 'aatharva' && !p.secretUltUsed) {
+        flash('🎸 SECRET ULTIMATE — GITAUR GOONING!','#ffd700')
+        const total = 20
+        setMini({
+          type:'guitar', side:'L', hits:0, total, timeLeft:60,
+          onSuccess: () => {
+            pushLog([{text:`🎸 GITAUR GOONING SUCCESS — INSTANT KO!`,color:'#ffd700'}])
+            const ne = { ...e, hp: 0 }
+            setMini(null); setPlayer({...p,secretUltUsed:true}); setEnemy(ne)
+            checkWin({...p,secretUltUsed:true}, ne)
+          },
+          onFail: () => {
+            pushLog([{text:`🎸 GITAUR GOONING FAILED — player eliminated!`,color:'#ff4444'}])
+            const np2 = { ...p, hp: 0, secretUltUsed: true }
+            setMini(null); setPlayer(np2); checkWin(np2, e)
+          }
+        })
+        return
       }
+      const np = addBuff({ ...p, defense: Math.min(100, p.defense + 20), ultUsed: true },
+        {id:'gitult',label:'GITUAR',value:40,turns:5})
+      flash('🎸 ULTIMATE GITUAR — shredding reality!','#ff2d9b')
+      pushLog([{text:`🎸 ULTIMATE GITUAR: ATK+40%, DEF+20%, all buffs ×2`,color:'#ff2d9b'}])
+      finishTurn(np, e)
     }
 
-    // ── DWEEB ──
-    if (p.id === 'dweeb') {
-      if (skillKey==='sharma') {
-        setMinigame('sharmana'); setPendingSkill('sharma'); return
-      } else if (skillKey==='fatjump') {
-        const canFake = (p.turnCount - p.fatJumpUsed) >= 5
-        if (canFake && fatJumpPending) {
-          // Faked! Free turn
-          newP.fatJumpUsed = newP.turnCount
-          setFatJumpPending(false)
-          addLog(`🏋️ Fat Jump FAKED! Free turn gained!`)
-          setPlayer(newP); setEnemy(newE)
-          setPlayerTurn(true); return
+    // ── DWEEB ────────────────────────────────────────────────────────────────
+    else if (skillId === 'sharmana') {
+      setMini({
+        type:'sharmana',
+        onSuccess: () => {
+          const dmg = Math.round(p.maxHp * 0.20 * atkMult)
+          const [ne, actual] = applyDamage(e, dmg)
+          flash(`🫣 SURPRISE ATTACK — ${actual} damage!`, '#39ff14')
+          pushLog([{text:`🫣 Sharmana surprise hit — ${actual} dmg!`,color:'#39ff14'}])
+          setMini(null); finishTurn(p, ne)
+        },
+        onFail: () => {
+          const dmg = Math.round(p.maxHp * 0.20)
+          const [np2, actual] = applyDamage(p, dmg)
+          flash(`🫣 Sharmana backfired — ${actual} self damage!`, '#ff4444')
+          pushLog([{text:`🫣 Sharmana failed — ${actual} self damage!`,color:'#ff4444'}])
+          setMini(null); finishTurn(np2, e)
         }
-        if (canFake) {
-          setFatJumpPending(true)
-          addLog(`🏋️ Fat Jump ready — press E to fake or click again to attack!`)
-          setPlayer(newP); return
-        }
-        const dmg = Math.round(newE.maxHp * 0.3 * newP.atkMult)
-        const actual = applyDef(dmg, newE.def)
-        newE.hp = clamp(newE.hp - actual)
-        addLog(`🏋️ Fat Jump! ${actual} DMG to ${e.name}!`)
-      } else if (skillKey==='yum') {
-        const canYum = (p.turnCount - p.yumUsed) >= 5
-        if (!canYum) { addLog(`🍜 Yum on cooldown! (${5-(p.turnCount-p.yumUsed)} turns left)`); return }
-        newP.yumUsed = newP.turnCount
-        setMinigame('yum'); setPendingSkill('yum'); return
-      } else if (skillKey==='ult') {
-        newP.atkMult = +(newP.atkMult * 2).toFixed(2)
-        newP.def = clamp(newP.def * 2)
-        newP.allMightActive = true
-        addLog(`💪 ALL MIGHT! Stats ×2! Debuffs ÷2! Incoming debuffs ×2 warning!`)
-      }
+      })
     }
-
-    setPlayer(newP)
-    setEnemy(newE)
-    checkEnd(newP, newE)
-    if (newP.hp > 0 && newE.hp > 0) {
-      setPlayerTurn(false)
-      enemyTurn(newP, newE)
+    else if (skillId === 'fatjump') {
+      const dmg = Math.round(p.maxHp * 0.30 * atkMult)
+      const [ne, actual] = applyDamage(e, dmg)
+      pushLog([{text:`💨 FAT JUMP — ${actual} damage!`,color:'#39ff14'}])
+      finishTurn(p, ne)
+    }
+    else if (skillId === 'yum') {
+      if (turnNum - p.yumUsed < 5 && p.yumUsed >= 0) {
+        flash('🍜 Yum is on cooldown (1 in 5 turns)!','#888'); return
+      }
+      const np = { ...p, yumUsed: turnNum }
+      // 59s countdown handled via mini but simplified to 3s for UX
+      flash('🍜 Dweeb is eating... please wait 59 seconds (we sped it up)','#39ff14')
+      pushLog([{text:`🍜 YUM — eating ramen... opponent waits...`,color:'#39ff14'}])
+      setTimeout(() => {
+        const np2 = { ...np, hp: np.maxHp }
+        flash('🍜 Dweeb is FULLY HEALED!','#39ff14')
+        pushLog([{text:`🍜 YUM complete — full heal!`,color:'#39ff14'}])
+        finishTurn(np2, e)
+      }, 3000)
+      setPlayer(np)
+    }
+    else if (skillId === 'allmight') {
+      if (p.ultUsed) { flash('⚡ Ultimate already used!','#888'); return }
+      const np = addBuff({ ...p, ultUsed: true }, {id:'allmight',label:'ALL MIGHT',value:2,turns:6})
+      flash('💪 ALL MIGHT — stats ×2, debuffs flip to heals!','#39ff14')
+      pushLog([{text:`💪 ALL MIGHT: stats ×2, debuffs become heals!`,color:'#39ff14'}])
+      finishTurn(np, e)
     }
   }
 
-  // ── Minigame result handler ──
-  const onMinigameResult = (success: boolean) => {
-    setMinigame(null)
-    if (!player || !enemy) return
-    const p = { ...player }
-    const e = { ...enemy }
-    p.turnCount += 1
-    if (p.turnCount % 5 === 0) p.ultReady = true
-
-    if (pendingSkill === 'babu') {
-      if (success) {
-        const dmg = Math.round(25 * p.atkMult)
-        const actual = applyDef(dmg, e.def)
-        e.hp = clamp(e.hp - actual)
-        addLog(`💋 Babu Shona HIT! ${actual} DMG to ${e.name}!`)
-      } else {
-        addLog(`💋 Babu Shona FAILED! Turn wasted.`)
-      }
-    } else if (pendingSkill === 'totla') {
-      if (success) {
-        const dmg = Math.round(35 * p.atkMult)
-        const actual = applyDef(dmg, e.def)
-        e.hp = clamp(e.hp - actual)
-        p.def = clamp(p.def + 10)
-        addLog(`👶 Totlapan HIT! "lu calnot tolk!" ${actual} DMG, +10 DEF!`)
-      } else {
-        addLog(`👶 Totlapan FAILED! Baby language too confusing. Turn wasted.`)
-      }
-    } else if (pendingSkill === 'sf90') {
-      if (success) {
-        const dmg = Math.round(e.maxHp * 0.6)
-        const actual = applyDef(dmg, e.def)
-        e.hp = clamp(e.hp - actual)
-        p.hp = p.maxHp
-        addLog(`🏎️ SF90 SUCCESS! 🏎️ A TRUE MERCEDES FAN! ${actual} DMG, full HP restored!`)
-      } else {
-        const selfDmg = Math.round(p.maxHp * 0.3)
-        p.hp = clamp(p.hp - selfDmg)
-        p.def = clamp(p.def - 40)
-        addLog(`💥 SF90 FAILED! 😢 Carlos Sainz 2023 Las Vegas... Car blew up! ${selfDmg} self-DMG, DEF-40%!`)
-      }
-    } else if (pendingSkill === 'sharma') {
-      if (success) {
-        const dmg = Math.round(p.maxHp * 0.2 * p.atkMult)
-        const actual = applyDef(dmg, e.def)
-        e.hp = clamp(e.hp - actual)
-        addLog(`🫣 Sharmana SUCCESS! Surprise attack! ${actual} DMG!`)
-      } else {
-        const selfDmg = Math.round(p.maxHp * 0.2)
-        p.hp = clamp(p.hp - selfDmg)
-        addLog(`🫣 Sharmana FAILED! ${selfDmg} self-damage!`)
-      }
-    } else if (pendingSkill === 'guitar_goon') {
-      if (success) {
-        e.hp = 0
-        addLog(`🎸 GUITAR GOONING SUCCESS! INSTANT KNOCKOUT! ${e.name} is ELIMINATED!`)
-      } else {
-        p.hp = 0
-        addLog(`🎸 GUITAR GOONING FAILED! You are ELIMINATED!`)
-      }
-    }
-
-    setPendingSkill(null)
-    setPlayer(p)
-    setEnemy(e)
-    checkEnd(p, e)
-    if (p.hp > 0 && e.hp > 0) {
-      setPlayerTurn(false)
-      enemyTurn(p, e)
-    }
-  }
-
-  const onYumResult = () => {
-    if (!player) return
-    const p = { ...player, hp: player.maxHp }
-    setPlayer(p)
-    setMinigame(null)
-    addLog(`🍜 Yum complete! ${p.name} fully healed!`)
-    setPlayerTurn(false)
-    if (enemy) enemyTurn(p, enemy)
-  }
-
-  // ── Fat Jump E key ──
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === 'e' && fatJumpPending && player) {
-        const p = { ...player, fatJumpUsed: player.turnCount }
-        setFatJumpPending(false)
-        setPlayer(p)
-        addLog(`🏋️ Fat Jump FAKED with E! Free turn!`)
-        setPlayerTurn(true)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [fatJumpPending, player])
-
-  // ─────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────
+  // ─── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="battle-root">
 
       {/* ── CHARACTER SELECT ── */}
       {phase === 'select' && (
-        <motion.div className="battle-select"
-          initial={{ opacity:0, y:40 }} animate={{ opacity:1, y:0 }}>
-          <div className="battle-select-header">
-            <div className="battle-diamond-row">◆ ◇ ◆ ◇ ◆</div>
-            <h2 className="battle-title">CHOOSE YOUR STAND USER</h2>
-            <p className="battle-sub">You will face 3 random opponents. Choose wisely.</p>
-          </div>
+        <motion.div className="battle-select" initial={{opacity:0,y:40}} animate={{opacity:1,y:0}}>
+          <button className="battle-exit-btn" onClick={onExit}>✕ EXIT</button>
+          <div className="battle-select-diamonds">◆ ◇ ◆ ◇ ◆</div>
+          <h2 className="battle-select-title">CHOOSE YOUR STAND USER</h2>
+          <p className="battle-select-sub">pick your fighter. the rest will be chosen by fate.</p>
+
           <div className="battle-char-grid">
-            {ALL.map(id => (
-              <motion.button key={id} className="battle-char-btn"
-                style={{ '--bc': CHAR_DEFS[id].color } as any}
-                onClick={() => startBattle(id)}
-                whileHover={{ scale:1.05, y:-4 }} whileTap={{ scale:0.95 }}>
-                <span className="bchar-emoji">{CHAR_DEFS[id].emoji}</span>
-                <span className="bchar-name" style={{ color: CHAR_DEFS[id].color, textShadow:`0 0 12px ${CHAR_DEFS[id].color}` }}>
-                  {CHAR_DEFS[id].name}
-                </span>
-                <span className="bchar-title">{CHAR_DEFS[id].title}</span>
-                <span className="bchar-bio">{CHAR_DEFS[id].bio}</span>
-                <div className="bchar-skills">
-                  {SKILLS[id].map(s=><span key={s.key} className="bchar-skill-tag">{s.label}</span>)}
-                </div>
+            {chars.map(id => (
+              <motion.button
+                key={id}
+                className={`battle-char-btn ${playerChar===id?'battle-char-selected':''}`}
+                style={{ '--bc': BASE[id].color } as any}
+                onClick={() => setPlayerChar(id)}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.96 }}
+              >
+                <div className="bcb-emoji">{BASE[id].emoji}</div>
+                <div className="bcb-name">{BASE[id].name}</div>
+                {playerChar===id && <div className="bcb-chosen">◆ CHOSEN</div>}
               </motion.button>
             ))}
           </div>
-          <button className="battle-exit-btn" onClick={onExit}>✕ Exit</button>
+
+          {playerChar && (
+            <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} className="battle-enemy-section">
+              <p className="battle-select-sub" style={{marginTop:'1.5rem'}}>
+                ◆ your opponent will be chosen randomly from the remaining fighters
+              </p>
+              <motion.button
+                className="battle-start-btn"
+                onClick={() => {
+                  const pool = chars.filter(c => c !== playerChar)
+                  const ec = pool[Math.floor(Math.random() * pool.length)]
+                  setEnemyChar(ec)
+                  startFight(playerChar, ec)
+                }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                ⚔️ BEGIN THE DUEL
+              </motion.button>
+            </motion.div>
+          )}
         </motion.div>
       )}
 
       {/* ── FIGHT ── */}
       {phase === 'fight' && player && enemy && (
         <div className="battle-fight">
-          {/* HP bars */}
-          <div className="battle-hpbars">
-            <HpBar fighter={player} isPlayer={true} />
-            <div className="battle-vs">⚔️</div>
-            <HpBar fighter={enemy} isPlayer={false} />
-          </div>
+          <button className="battle-exit-btn" onClick={onExit}>✕ EXIT</button>
 
-          {/* Enemy queue */}
-          <div className="battle-queue">
-            {enemies.map((e,i) => (
-              <span key={e.id} className={`queue-chip ${i===enemyIdx?'queue-active':i<enemyIdx?'queue-dead':''}`}
-                style={{ '--qc': e.color } as any}>
-                {e.emoji} {e.name} {i<enemyIdx?'💀':''}
-              </span>
-            ))}
-          </div>
-
-          {/* Minigame overlay */}
+          {/* flash message */}
           <AnimatePresence>
-            {minigame && (
-              <motion.div className="minigame-overlay"
-                initial={{ opacity:0, scale:0.9 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0 }}>
-                {minigame==='rta_babu'    && <RTAGame label="💋 Babu Shona — click when the heart appears!" onResult={onMinigameResult} />}
-                {minigame==='rta_totlapan'&& <RTAGame label='👶 Totlapan — "lu calnot tolk!" click on time!' onResult={onMinigameResult} />}
-                {minigame==='sf90'        && <SF90Game onResult={onMinigameResult} />}
-                {minigame==='guitar_goon' && <GuitarGoonGame onResult={onMinigameResult} />}
-                {minigame==='sharmana'    && <SharmanaGame onResult={onMinigameResult} />}
-                {minigame==='yum'         && <YumGame onResult={onYumResult} />}
+            {msg && (
+              <motion.div className="battle-flash" style={{ color: msgColor }}
+                initial={{opacity:0,scale:0.7}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:1.2}}>
+                {msg}
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Skill buttons */}
-          {playerTurn && !minigame && (
+          {/* HP bars */}
+          <div className="battle-hud">
+            <FighterHUD f={player} label="YOU" />
+            <div className="battle-vs">⚔️<br/><span className="battle-turn-label">{turn==='player'?'YOUR TURN':'ENEMY TURN'}</span></div>
+            <FighterHUD f={enemy} label="ENEMY" flip />
+          </div>
+
+          {/* Mini-game overlay */}
+          <AnimatePresence>
+            {mini && (
+              <motion.div className="mini-overlay"
+                initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
+                {mini.type === 'rta'      && <RTAGame      mini={mini} />}
+                {mini.type === 'babble'   && <BabbleGame   mini={mini} setMini={setMini as any} />}
+                {mini.type === 'ferrari'  && <FerrariGame  mini={mini} />}
+                {mini.type === 'guitar'   && <GuitarGame   mini={mini} />}
+                {mini.type === 'sharmana' && <SharmanaGame mini={mini} />}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Skills */}
+          {turn === 'player' && !mini && (
             <div className="battle-skills">
-              <div className="skills-label">YOUR TURN — Choose a move:</div>
-              <div className="skills-grid">
-                {SKILLS[player.id].map(s => {
-                  const isUlt = s.key==='ult'
-                  const disabled = isUlt && !player.ultReady
+              <p className="battle-skills-label">◆ YOUR MOVES</p>
+              <div className="battle-skills-grid">
+                {SKILLS[player.id].map(sk => {
+                  const isUlt = sk.id.endsWith('ult') || sk.id === 'gitult' || sk.id === 'allmight' || sk.id === 'chaati' || sk.id === 'goonult'
+                  const disabled = isUlt && player.ultUsed
+                  const isLoaded = sk.id === 'loaded' && loadedCharge
                   return (
-                    <motion.button key={s.key}
-                      className={`skill-btn ${isUlt?'skill-ult':''} ${disabled?'skill-disabled':''}`}
+                    <motion.button
+                      key={sk.id}
+                      className={`skill-btn ${isUlt?'skill-ult':''} ${disabled?'skill-disabled':''} ${isLoaded?'skill-charged':''}`}
                       style={{ '--sc': player.color } as any}
-                      onClick={() => useSkill(s.key)}
-                      disabled={disabled}
-                      whileHover={!disabled?{ scale:1.04 }:{}}
-                      whileTap={!disabled?{ scale:0.96 }:{}}>
-                      <span className="skill-btn-label">{s.label}</span>
-                      <span className="skill-btn-desc">{s.desc}</span>
-                      {isUlt && !player.ultReady && (
-                        <span className="skill-ult-charge">
-                          {5-(player.turnCount%5)} turns
-                        </span>
-                      )}
+                      onClick={() => !disabled && useSkill(sk.id)}
+                      whileHover={!disabled?{ scale:1.04, y:-2 }:{}}
+                      whileTap={!disabled?{ scale:0.96 }:{}}
+                    >
+                      <span className="skill-icon">{sk.icon}</span>
+                      <span className="skill-label">{isLoaded ? '💥 RELEASE!' : sk.label}</span>
+                      <span className="skill-desc">{sk.desc}</span>
+                      {isUlt && player.ultUsed && <span className="skill-used">USED</span>}
                     </motion.button>
                   )
                 })}
               </div>
-              {fatJumpPending && (
-                <div className="fatjump-hint">Press <kbd>E</kbd> to FAKE the jump!</div>
+              {/* Dweeb fake hint */}
+              {player.id === 'dweeb' && (
+                <p className="battle-e-hint">press <kbd>E</kbd> during Fat Jump to fake it (1/5 turns)</p>
               )}
             </div>
           )}
 
-          {!playerTurn && !minigame && (
-            <div className="enemy-thinking">
+          {turn === 'enemy' && !mini && (
+            <div className="battle-enemy-thinking">
               <motion.div animate={{ opacity:[0.4,1,0.4] }} transition={{ repeat:Infinity, duration:1 }}>
-                ⚔️ {enemy.name} is thinking...
+                ⏳ {enemy.name} is thinking...
               </motion.div>
             </div>
           )}
 
-          <BattleLog lines={log} />
-          <button className="battle-exit-btn" onClick={onExit}>✕ Forfeit</button>
+          {/* Battle log */}
+          <div className="battle-log" ref={logRef}>
+            {log.map((l,i) => (
+              <div key={i} className="log-line" style={{ color: l.color || 'rgba(245,240,255,0.7)' }}>
+                {l.text}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {/* ── GAME OVER ── */}
-      {phase === 'gameover' && (
-        <motion.div className="battle-gameover"
-          initial={{ opacity:0, scale:0.8 }} animate={{ opacity:1, scale:1 }}>
-          <div className="gameover-diamond">◆</div>
-          <h2 className="gameover-title" style={{ color: winner==='player'?'#ffd700':'#ff2d9b' }}>
-            {winner==='player' ? '🏆 STAND VICTORIOUS!' : '💀 YOU HAVE BEEN ELIMINATED'}
+      {phase === 'over' && (
+        <motion.div className="battle-over" initial={{opacity:0,scale:0.8}} animate={{opacity:1,scale:1}}>
+          <div className="over-diamonds">◆ ◇ ◆ ◇ ◆</div>
+          <div className="over-emoji">{winner === player?.name ? '🏆' : '💀'}</div>
+          <h2 className="over-title" style={{ color: winner===player?.name?'#ffd700':'#ff4444' }}>
+            {winner === player?.name ? 'STAND VICTORIOUS!' : 'YOU HAVE BEEN DEFEATED'}
           </h2>
-          <p className="gameover-sub">
-            {winner==='player'
-              ? 'Your Stand has proven itself. YARE YARE DAZE.'
-              : 'The enemy Stand was stronger. Touch grass and try again.'}
-          </p>
-          <div className="gameover-btns">
-            <button className="quiz-start-btn" onClick={() => {
-              setPhase('select'); setPlayer(null); setEnemy(null)
-              setEnemies([]); setLog([]); setWinner(null); setEnemyIdx(0)
-              setFatJumpPending(false); setMinigame(null); setPendingSkill(null)
-            }}>◆ Play Again</button>
-            <button className="battle-exit-btn" onClick={onExit}>✕ Exit</button>
+          <p className="over-sub">{winner} wins the duel!</p>
+          <div className="over-btns">
+            <motion.button className="battle-start-btn" onClick={() => { setPhase('select'); setPlayerChar(null); setEnemyChar(null) }}
+              whileHover={{scale:1.05}}>⚔️ REMATCH</motion.button>
+            <motion.button className="battle-exit-btn-lg" onClick={onExit} whileHover={{scale:1.05}}>🚪 EXIT</motion.button>
           </div>
         </motion.div>
       )}
+    </div>
+  )
+}
 
+// ─── Fighter HUD ─────────────────────────────────────────────────────────────
+function FighterHUD({ f, label, flip }: { f:Fighter; label:string; flip?:boolean }) {
+  const pct = (f.hp / f.maxHp) * 100
+  const hpColor = pct > 50 ? '#39ff14' : pct > 25 ? '#ffd700' : '#ff4444'
+  return (
+    <div className={`fighter-hud ${flip?'fighter-hud-flip':''}`}>
+      <div className="fhud-label">{label}</div>
+      <div className="fhud-emoji">{f.emoji}</div>
+      <div className="fhud-name" style={{ color: f.color, textShadow:`0 0 10px ${f.color}` }}>{f.name}</div>
+      <div className="fhud-hp-row">
+        <div className="fhud-hp-bar-bg">
+          <motion.div className="fhud-hp-bar" style={{ background: hpColor, boxShadow:`0 0 8px ${hpColor}` }}
+            animate={{ width:`${pct}%` }} transition={{ duration:0.4 }} />
+        </div>
+        <span className="fhud-hp-num">{Math.ceil(f.hp)}/{f.maxHp}</span>
+      </div>
+      {f.defense > 0 && <div className="fhud-def">🛡️ {Math.round(f.defense)}</div>}
+      <div className="fhud-status">
+        {f.buffs.map(b => <span key={b.id} className="status-buff">↑{b.label}</span>)}
+        {f.debuffs.map(d => <span key={d.id} className="status-debuff">↓{d.label}</span>)}
+      </div>
+    </div>
+  )
+}
+
+// ─── Mini-games ───────────────────────────────────────────────────────────────
+
+// RTA — click the button in a tight window
+function RTAGame({ mini }: { mini: Extract<MiniGame,{type:'rta'}> }) {
+  const [active, setActive] = useState(false)
+  const [done, setDone] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout>|null>(null)
+
+  useEffect(() => {
+    const delay = 800 + Math.random() * 1400
+    timerRef.current = setTimeout(() => { setActive(true) }, delay)
+    const kill = setTimeout(() => {
+      if (!done) { setDone(true); mini.onFail() }
+    }, delay + mini.window + 600)
+    return () => { clearTimeout(timerRef.current!); clearTimeout(kill) }
+  }, [])
+
+  const hit = () => {
+    if (!active || done) return
+    setDone(true)
+    mini.onSuccess()
+  }
+
+  return (
+    <div className="mini-box">
+      <p className="mini-title">{mini.label}</p>
+      <p className="mini-sub">{active ? '👆 CLICK NOW!' : '⏳ Wait for it...'}</p>
+      <motion.button
+        className={`mini-rta-btn ${active ? 'mini-rta-active' : ''}`}
+        onClick={hit}
+        animate={active ? { scale:[1,1.15,1], boxShadow:['0 0 0px #ffd700','0 0 30px #ffd700','0 0 0px #ffd700'] } : {}}
+        transition={{ duration:0.4, repeat:Infinity }}
+      >
+        {active ? '💥 NOW!' : '...'}
+      </motion.button>
+    </div>
+  )
+}
+
+// Babble — click words in order
+function BabbleGame({ mini, setMini }: { mini: Extract<MiniGame,{type:'babble'}>; setMini: (m:any)=>void }) {
+  const [idx, setIdx] = useState(0)
+  const [timeLeft, setTimeLeft] = useState(8)
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    if (done) return
+    const t = setInterval(() => setTimeLeft(t => {
+      if (t <= 1) { clearInterval(t); if(!done){setDone(true); mini.onFail()} return 0 }
+      return t - 1
+    }), 1000)
+    return () => clearInterval(t)
+  }, [done])
+
+  const hit = () => {
+    if (done) return
+    const next = idx + 1
+    if (next >= mini.words.length) { setDone(true); mini.onSuccess() }
+    else setIdx(next)
+  }
+
+  return (
+    <div className="mini-box">
+      <p className="mini-title">🍼 TOTLAPAN — click each word as it appears!</p>
+      <p className="mini-sub">Time: {timeLeft}s</p>
+      <div className="mini-babble-word">
+        <motion.span key={idx} initial={{scale:0.5,opacity:0}} animate={{scale:1,opacity:1}}>
+          {mini.words[idx]}
+        </motion.span>
+      </div>
+      <p className="mini-sub">{idx+1} / {mini.words.length}</p>
+      <motion.button className="mini-rta-btn mini-rta-active" onClick={hit} whileTap={{scale:0.9}}>
+        TAP! 🍼
+      </motion.button>
+    </div>
+  )
+}
+
+// Ferrari — assemble parts
+function FerrariGame({ mini }: { mini: Extract<MiniGame,{type:'ferrari'}> }) {
+  const [assembled, setAssembled] = useState<string[]>([])
+  const [timeLeft, setTimeLeft] = useState(60)
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    const t = setInterval(() => setTimeLeft(t => {
+      if (t <= 1) { clearInterval(t); if(!done){setDone(true); mini.onFail()} return 0 }
+      return t - 1
+    }), 1000)
+    return () => clearInterval(t)
+  }, [done])
+
+  const attach = (part: string) => {
+    if (done || assembled.includes(part)) return
+    const next = [...assembled, part]
+    setAssembled(next)
+    if (next.length === mini.parts.length) { setDone(true); mini.onSuccess() }
+  }
+
+  return (
+    <div className="mini-box">
+      <p className="mini-title">🏎️ SF90 — Build the Ferrari! ({timeLeft}s)</p>
+      <p className="mini-sub">Tap each part to assemble:</p>
+      <div className="mini-parts-grid">
+        {mini.parts.map(p => (
+          <motion.button key={p}
+            className={`mini-part-btn ${assembled.includes(p)?'mini-part-done':''}`}
+            onClick={() => attach(p)}
+            whileTap={{scale:0.9}}
+          >
+            {assembled.includes(p) ? '✅ ' : ''}{p}
+          </motion.button>
+        ))}
+      </div>
+      <div className="mini-progress-bar-bg">
+        <div className="mini-progress-bar-fill" style={{ width:`${(assembled.length/mini.parts.length)*100}%` }} />
+      </div>
+    </div>
+  )
+}
+
+// Guitar duel — alternate L/R hits
+function GuitarGame({ mini }: { mini: Extract<MiniGame,{type:'guitar'}> }) {
+  const [side, setSide] = useState<'L'|'R'>('L')
+  const [hits, setHits] = useState(0)
+  const [timeLeft, setTimeLeft] = useState(60)
+  const [done, setDone] = useState(false)
+  const total = mini.total
+
+  useEffect(() => {
+    const t = setInterval(() => setTimeLeft(t => {
+      if (t <= 1) { clearInterval(t); if(!done){setDone(true); mini.onFail()} return 0 }
+      return t - 1
+    }), 1000)
+    return () => clearInterval(t)
+  }, [done])
+
+  const hit = (s: 'L'|'R') => {
+    if (done || s !== side) return
+    const next = hits + 1
+    setHits(next)
+    setSide(s === 'L' ? 'R' : 'L')
+    if (next >= total) { setDone(true); mini.onSuccess() }
+  }
+
+  return (
+    <div className="mini-box">
+      <p className="mini-title">🎸 GITAUR GOONING — alternate L & R! ({timeLeft}s)</p>
+      <p className="mini-sub">{hits}/{total} hits — next: <strong>{side}</strong></p>
+      <div className="mini-guitar-btns">
+        <motion.button className={`mini-guitar-btn ${side==='L'?'guitar-active':''}`}
+          onClick={() => hit('L')} whileTap={{scale:0.9}}>🎸 L</motion.button>
+        <motion.button className={`mini-guitar-btn ${side==='R'?'guitar-active':''}`}
+          onClick={() => hit('R')} whileTap={{scale:0.9}}>🎸 R</motion.button>
+      </div>
+      <div className="mini-progress-bar-bg">
+        <div className="mini-progress-bar-fill" style={{ width:`${(hits/total)*100}%`, background:'#ffd700' }} />
+      </div>
+    </div>
+  )
+}
+
+// Sharmana — click at the right moment
+function SharmanaGame({ mini }: { mini: Extract<MiniGame,{type:'sharmana'}> }) {
+  const [active, setActive] = useState(false)
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    const delay = 600 + Math.random() * 1200
+    const t = setTimeout(() => setActive(true), delay)
+    const kill = setTimeout(() => { if(!done){setDone(true); mini.onFail()} }, delay + 700)
+    return () => { clearTimeout(t); clearTimeout(kill) }
+  }, [])
+
+  return (
+    <div className="mini-box">
+      <p className="mini-title">🫣 SHARMANA — click when he appears!</p>
+      <p className="mini-sub">{active ? '👀 THERE HE IS!' : '🫣 hiding...'}</p>
+      <motion.button
+        className={`mini-rta-btn ${active?'mini-rta-active':''}`}
+        onClick={() => { if(active&&!done){setDone(true); mini.onSuccess()} }}
+        animate={active?{scale:[1,1.2,1]}:{}}
+        transition={{duration:0.3,repeat:Infinity}}
+      >
+        {active ? '🫣 CATCH HIM!' : '...'}
+      </motion.button>
     </div>
   )
 }
