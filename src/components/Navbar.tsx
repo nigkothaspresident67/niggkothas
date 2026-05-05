@@ -33,7 +33,7 @@ export default function Navbar() {
   return (
     <>
       <motion.nav
-        className={`navbar ${scrolled ? 'navbar-scrolled' : ''}`}
+        className="navbar navbar-solid"
         initial={{ y: -80, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.6, ease: 'easeOut' }}
