@@ -19,7 +19,6 @@ export default function Navbar() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
-  // lock body scroll when menu open
   useEffect(() => {
     document.body.style.overflow = menuOpen ? 'hidden' : ''
     return () => { document.body.style.overflow = '' }
@@ -33,17 +32,28 @@ export default function Navbar() {
   return (
     <>
       <motion.nav
-        className="navbar navbar-solid"
+        className={`navbar navbar-solid ${scrolled ? 'navbar-scrolled' : ''}`}
         initial={{ y: -80, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.6, ease: 'easeOut' }}
       >
+        {/* DIO dashing across the navbar */}
+        <div className="nav-dio-track">
+          <motion.span
+            className="nav-dio"
+            animate={{ x: ['-120px', 'calc(100vw + 120px)'] }}
+            transition={{ duration: 3, repeat: Infinity, repeatDelay: 6, ease: 'easeInOut' }}
+          >
+            DIO ◆ WRYYYY
+          </motion.span>
+        </div>
+
         <div className="nav-logo" onClick={() => scrollTo('hero')}>
-          <span className="logo-main">nigg</span><span className="logo-accent">kothas</span>
+          <span className="logo-main">nigg</span>
+          <span className="logo-accent">kothas</span>
           <span className="logo-dot">◆</span>
         </div>
 
-        {/* Desktop links */}
         <div className="nav-links">
           {navItems.map(([id, label]) => (
             <button key={id} className="nav-link" onClick={() => scrollTo(id)}>
@@ -52,7 +62,6 @@ export default function Navbar() {
           ))}
         </div>
 
-        {/* Hamburger button — mobile only */}
         <button
           className={`hamburger ${menuOpen ? 'hamburger-open' : ''}`}
           onClick={() => setMenuOpen(o => !o)}
@@ -64,56 +73,32 @@ export default function Navbar() {
         </button>
       </motion.nav>
 
-      {/* Mobile drawer */}
       <AnimatePresence>
         {menuOpen && (
           <>
-            {/* backdrop */}
-            <motion.div
-              className="mobile-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setMenuOpen(false)}
-            />
-
-            {/* drawer */}
-            <motion.div
-              className="mobile-drawer"
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            >
-              {/* drawer header */}
+            <motion.div className="mobile-backdrop"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setMenuOpen(false)} />
+            <motion.div className="mobile-drawer"
+              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
               <div className="drawer-header">
                 <span className="drawer-logo">
                   <span className="logo-main">nigg</span><span className="logo-accent">kothas</span>
                 </span>
                 <button className="drawer-close" onClick={() => setMenuOpen(false)}>✕</button>
               </div>
-
-              {/* diamond divider */}
               <div className="drawer-diamonds">◆ ◇ ◆ ◇ ◆</div>
-
-              {/* nav items */}
               <nav className="drawer-nav">
                 {navItems.map(([id, label], i) => (
-                  <motion.button
-                    key={id}
-                    className="drawer-link"
-                    onClick={() => scrollTo(id)}
-                    initial={{ opacity: 0, x: 40 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.07 }}
-                    whileTap={{ scale: 0.96 }}
-                  >
+                  <motion.button key={id} className="drawer-link" onClick={() => scrollTo(id)}
+                    initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.07 }} whileTap={{ scale: 0.96 }}>
                     <span className="drawer-link-diamond">◆</span>
                     {label}
                   </motion.button>
                 ))}
               </nav>
-
               <div className="drawer-diamonds" style={{ marginTop: 'auto' }}>◇ ◆ ◇ ◆ ◇</div>
               <p className="drawer-footer">YARE YARE DAZE...</p>
             </motion.div>

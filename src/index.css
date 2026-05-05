@@ -191,11 +191,39 @@ body {
 .navbar-solid .ham-line { background: #08050f; box-shadow: none; }
 
 .navbar-scrolled {
-  background: #fff400;
-  border-bottom: 2px solid rgba(0,0,0,0.15);
+  background: rgba(8,5,15,0.95) !important;
+  backdrop-filter: blur(20px);
+  border-bottom: 2px solid rgba(255,215,0,0.25) !important;
   padding: 0.7rem 2.5rem;
-  box-shadow: 0 4px 24px rgba(255,212,0,0.4);
+  box-shadow: 0 4px 30px rgba(123,47,190,0.3);
 }
+.navbar-scrolled .logo-main { color: #f5f0ff !important; }
+.navbar-scrolled .logo-accent { color: #ffd700 !important; }
+.navbar-scrolled .logo-dot { color: #ff2d9b !important; }
+.navbar-scrolled .nav-link { color: rgba(245,240,255,0.7) !important; font-weight: 500 !important; }
+.navbar-scrolled .nav-link:hover { color: #ffd700 !important; }
+.navbar-scrolled .ham-line { background: #ffd700 !important; box-shadow: 0 0 6px rgba(255,215,0,0.5) !important; }
+
+/* DIO dash */
+.nav-dio-track {
+  position: absolute;
+  left: 0; right: 0; top: 0; bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.nav-dio {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.2em;
+  color: rgba(8,5,15,0.35);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.navbar-scrolled .nav-dio { color: rgba(255,215,0,0.15); }
 
 .nav-logo {
   font-family: 'Bebas Neue', sans-serif;

@@ -23,7 +23,6 @@ export default function App() {
   return (
     <div className="app-root">
       <Cursor />
-
       <AnimatePresence>
         {!loaded && (
           <motion.div key="loader" className="loader-screen"
@@ -83,7 +82,6 @@ export default function App() {
         </motion.div>
       )}
 
-      {/* Battle overlay */}
       <AnimatePresence>
         {battleOpen && (
           <motion.div className="battle-overlay"
